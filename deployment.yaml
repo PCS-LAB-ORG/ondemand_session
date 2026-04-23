@@ -142,7 +142,7 @@ metadata:
   labels:
     app: backend
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: backend
@@ -154,7 +154,7 @@ spec:
       serviceAccountName: session-manager
       containers:
         - name: backend
-          image: BACKEND_IMAGE_PLACEHOLDER
+          image: us-central1-docker.pkg.dev/pcs-swat-resources/pcs-swat-images/ondemand-session-backend:latest
           ports:
             - containerPort: 8000
           env:
@@ -168,11 +168,11 @@ spec:
               value: pcs.lab.twistlock.com
             # GCP cluster credentials for gcloud get-credentials
             - name: ONDEMAND_GCP_PROJECT
-              value: YOUR_GCP_PROJECT
+              value:  pcs-swat-resources
             - name: ONDEMAND_GCP_CLUSTER
-              value: YOUR_GKE_CLUSTER_NAME
+              value: pcs-gke-compute-lab
             - name: ONDEMAND_GCP_ZONE
-              value: YOUR_GKE_ZONE
+              value: us-central1-a
           readinessProbe:
             httpGet:
               path: /healthz
@@ -217,7 +217,7 @@ metadata:
   labels:
     app: frontend
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: frontend
@@ -228,7 +228,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: FRONTEND_IMAGE_PLACEHOLDER
+          image: us-central1-docker.pkg.dev/pcs-swat-resources/pcs-swat-images/ondemand-session-frontend:latest
           ports:
             - containerPort: 80
           readinessProbe:
