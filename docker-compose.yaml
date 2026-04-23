@@ -1,0 +1,45 @@
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - ONDEMAND_REDIS_HOST=redis
+      - ONDEMAND_REDIS_PORT=6379
+      - ONDEMAND_SESSION_TTL_HOURS=12
+      - ONDEMAND_SESSION_DOMAIN=pcs.lab.twistlock.com
+      # Set these to your GKE cluster details
+      - ONDEMAND_GCP_PROJECT=
+      - ONDEMAND_GCP_CLUSTER=
+      - ONDEMAND_GCP_ZONE=
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      # gcloud and kube configs so the backend can run gcloud/kubectl
+      - ${HOME}/.config/gcloud:/root/.config/gcloud:ro
+      - ${HOME}/.kube:/root/.kube:ro
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+
+volumes:
+  redis-data:

@@ -1,0 +1,292 @@
+# =============================================================================
+# On-Demand Session Platform - Single-file Kubernetes Deployment
+#
+# Apply with:  kubectl apply -f deployment.yaml
+# Tear down:   kubectl delete -f deployment.yaml
+# =============================================================================
+
+# --- Namespaces --------------------------------------------------------------
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ondemand-platform
+  labels:
+    app.kubernetes.io/part-of: ondemand-session
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: user-sessions
+  labels:
+    app.kubernetes.io/part-of: ondemand-session
+
+# --- RBAC --------------------------------------------------------------------
+# The backend calls kubectl to create/delete resources in user-sessions.
+# This ServiceAccount gives it the required permissions.
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: session-manager
+  namespace: ondemand-platform
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: session-manager-role
+  namespace: user-sessions
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["create", "get", "list", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["create", "get", "list", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: session-manager-binding
+  namespace: user-sessions
+subjects:
+  - kind: ServiceAccount
+    name: session-manager
+    namespace: ondemand-platform
+roleRef:
+  kind: Role
+  name: session-manager-role
+  apiGroup: rbac.authorization.k8s.io
+
+# --- Network Policy ----------------------------------------------------------
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-inter-session-traffic
+  namespace: user-sessions
+spec:
+  podSelector:
+    matchLabels:
+      app: user-session
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 80
+
+# --- Redis -------------------------------------------------------------------
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: ondemand-platform
+  labels:
+    app: redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - containerPort: 6379
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: ondemand-platform
+spec:
+  selector:
+    app: redis
+  ports:
+    - port: 6379
+      targetPort: 6379
+      protocol: TCP
+
+# --- Backend -----------------------------------------------------------------
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: ondemand-platform
+  labels:
+    app: backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      serviceAccountName: session-manager
+      containers:
+        - name: backend
+          image: BACKEND_IMAGE_PLACEHOLDER
+          ports:
+            - containerPort: 8000
+          env:
+            - name: ONDEMAND_REDIS_HOST
+              value: redis.ondemand-platform.svc.cluster.local
+            - name: ONDEMAND_SESSION_NAMESPACE
+              value: user-sessions
+            - name: ONDEMAND_SESSION_TTL_HOURS
+              value: "12"
+            - name: ONDEMAND_SESSION_DOMAIN
+              value: pcs.lab.twistlock.com
+            # GCP cluster credentials for gcloud get-credentials
+            - name: ONDEMAND_GCP_PROJECT
+              value: YOUR_GCP_PROJECT
+            - name: ONDEMAND_GCP_CLUSTER
+              value: YOUR_GKE_CLUSTER_NAME
+            - name: ONDEMAND_GCP_ZONE
+              value: YOUR_GKE_ZONE
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: ondemand-platform
+spec:
+  selector:
+    app: backend
+  ports:
+    - port: 80
+      targetPort: 8000
+      protocol: TCP
+
+# --- Frontend ----------------------------------------------------------------
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: ondemand-platform
+  labels:
+    app: frontend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+        - name: frontend
+          image: FRONTEND_IMAGE_PLACEHOLDER
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: ondemand-platform
+spec:
+  selector:
+    app: frontend
+  ports:
+    - port: 80
+      targetPort: 80
+      protocol: TCP
+
+# --- Platform Ingress --------------------------------------------------------
+# Routes the main UI and API. Session pod ingresses are created dynamically
+# by the backend (one Ingress per session with host-based routing).
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: platform-ingress
+  namespace: ondemand-platform
+  annotations:
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          - path: /api(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: backend
+                port:
+                  number: 80
+          - path: /()(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 80
